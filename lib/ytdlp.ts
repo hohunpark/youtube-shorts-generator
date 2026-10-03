@@ -326,8 +326,9 @@ function languageFromName(filePath: string): string {
 }
 
 function commandOnPath(name: string): Promise<string | null> {
+  const locator = process.platform === "win32" ? "where.exe" : "which";
   return new Promise((resolve) => {
-    const child = spawn("where.exe", [name], { windowsHide: true });
+    const child = spawn(locator, [name], { windowsHide: true });
     let stdout = "";
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();

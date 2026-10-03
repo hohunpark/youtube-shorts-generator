@@ -6,8 +6,10 @@ import type { PaceBeat } from "@/lib/types";
 import type { HookTitle } from "@/lib/render-types";
 import { ensureSectionClip } from "@/lib/ytdlp";
 
-const BOLD_FONT = "C:/Windows/Fonts/malgunbd.ttf";
-const REGULAR_FONT = "C:/Windows/Fonts/malgun.ttf";
+const FONT_DIR = process.platform === "win32" ? "C:/Windows/Fonts" : "/usr/share/fonts/opentype/noto";
+const BOLD_FONT = process.platform === "win32" ? `${FONT_DIR}/malgunbd.ttf` : `${FONT_DIR}/NotoSansCJK-Bold.ttc`;
+const REGULAR_FONT = process.platform === "win32" ? `${FONT_DIR}/malgun.ttf` : `${FONT_DIR}/NotoSansCJK-Regular.ttc`;
+const FONT_NAME = process.platform === "win32" ? "Malgun Gothic" : "Noto Sans CJK KR";
 const CANVAS_W = 720;
 const CANVAS_H = 1280;
 
@@ -276,7 +278,7 @@ function captionChain(input: {
   videoY: number;
   sticker: boolean;
 }): string[] {
-  const subs = `subtitles='${ffmpegPath(input.assPath)}':fontsdir='${ffmpegPath("C:/Windows/Fonts")}'`;
+  const subs = `subtitles='${ffmpegPath(input.assPath)}':fontsdir='${ffmpegPath(FONT_DIR)}'`;
   if (!input.sticker) return [`[framed]${subs}[v]`];
 
   const stickerH = 168;
@@ -374,8 +376,8 @@ function buildAss(
     "",
     "[V4+ Styles]",
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-    "Style: Title,Malgun Gothic,52,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,8,0,5,24,24,24,1",
-    "Style: Cap,Malgun Gothic,40,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,6,0,5,24,24,24,1",
+    `Style: Title,${FONT_NAME},52,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,8,0,5,24,24,24,1`,
+    `Style: Cap,${FONT_NAME},40,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,6,0,5,24,24,24,1`,
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
