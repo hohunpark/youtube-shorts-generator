@@ -1,4 +1,5 @@
 import { parseVtt, type TimedCue } from "@/lib/timed-text";
+import { youtubeCookieHeader } from "@/lib/youtube-cookies";
 import {
   YoutubeTranscript,
   YoutubeTranscriptDisabledError,
@@ -70,6 +71,12 @@ type InvidiousCaption = {
 };
 
 async function loadTranscript(videoId: string): Promise<TranscriptResponse[]> {
+  const cookie = await youtubeCookieHeader();
+  if (cookie) {
+    const fromCookies = await fetchTranscriptWithCookies(videoId, cookie);
+    if (fromCookies && fromCookies.length >= 2) return fromCookies;
+  }
+
   let lastError: unknown;
   try {
     return await withTimeout(YoutubeTranscript.fetchTranscript(videoId, { lang: "ko" }), 12000);
@@ -87,6 +94,92 @@ async function loadTranscript(videoId: string): Promise<TranscriptResponse[]> {
   const backup = await fetchInvidiousTranscript(videoId);
   if (backup && backup.length >= 2) return backup;
   throw new CaptionFetchError(captionErrorMessage(lastError));
+}
+
+async function fetchTranscriptWithCookies(
+  videoId: string,
+  cookie: string,
+): Promise<TranscriptResponse[] | null> {
+  try {
+    const page = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+      headers: youtubeHeaders(cookie),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!page.ok) return null;
+    const track = pickTrack(captionTracks(await page.text()));
+    if (!track?.baseUrl) return null;
+
+    const url = track.baseUrl.includes("fmt=") ? track.baseUrl : `${track.baseUrl}&fmt=json3`;
+    const body = await fetch(url, {
+      headers: youtubeHeaders(cookie),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!body.ok) return null;
+    const rows = transcriptFromCaptionBody(await body.text(), track.languageCode ?? "auto");
+    return rows.length >= 2 ? rows : null;
+  } catch {
+    return null;
+  }
+}
+
+function youtubeHeaders(cookie: string): HeadersInit {
+  return {
+    "User-Agent": INVIDIOUS_USER_AGENT,
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    Cookie: cookie,
+  };
+}
+
+type CaptionTrack = { baseUrl?: string; languageCode?: string };
+
+function pickTrack(tracks: CaptionTrack[]): CaptionTrack | null {
+  const code = (track: CaptionTrack) => (track.languageCode ?? "").toLowerCase().split(/[-_]/)[0];
+  return (
+    tracks.find((track) => code(track) === "ko" && track.baseUrl) ??
+    tracks.find((track) => code(track) === "en" && track.baseUrl) ??
+    tracks.find((track) => track.baseUrl) ??
+    null
+  );
+}
+
+function captionTracks(html: string): CaptionTrack[] {
+  const marker = html.indexOf("ytInitialPlayerResponse");
+  if (marker < 0) return [];
+  const jsonStart = html.indexOf("{", marker);
+  if (jsonStart < 0) return [];
+  const json = sliceJson(html, jsonStart);
+  if (!json) return [];
+
+  try {
+    const data = JSON.parse(json) as {
+      captions?: { playerCaptionsTracklistRenderer?: { captionTracks?: CaptionTrack[] } };
+    };
+    return data.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function sliceJson(text: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
+  }
+  return null;
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
