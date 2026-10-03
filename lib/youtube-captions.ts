@@ -105,19 +105,36 @@ async function fetchTranscriptWithCookies(
       headers: youtubeHeaders(cookie),
       signal: AbortSignal.timeout(15000),
     });
-    if (!page.ok) return null;
+    if (!page.ok) {
+      console.error(`[captions] 쿠키 포함 watch 페이지 응답 ${page.status}`);
+      return null;
+    }
     const track = pickTrack(captionTracks(await page.text()));
-    if (!track?.baseUrl) return null;
+    if (!track?.baseUrl) {
+      console.error("[captions] 쿠키로 연 페이지에서 자막 트랙을 찾지 못했습니다.");
+      return null;
+    }
 
     const url = track.baseUrl.includes("fmt=") ? track.baseUrl : `${track.baseUrl}&fmt=json3`;
     const body = await fetch(url, {
       headers: youtubeHeaders(cookie),
       signal: AbortSignal.timeout(15000),
     });
-    if (!body.ok) return null;
+    if (!body.ok) {
+      console.error(`[captions] 쿠키 포함 자막 트랙 응답 ${body.status}`);
+      return null;
+    }
     const rows = transcriptFromCaptionBody(await body.text(), track.languageCode ?? "auto");
-    return rows.length >= 2 ? rows : null;
-  } catch {
+    if (rows.length < 2) {
+      console.error(`[captions] 쿠키 자막 트랙을 파싱했지만 구간이 ${rows.length}개입니다.`);
+      return null;
+    }
+    return rows;
+  } catch (error) {
+    console.error(
+      "[captions] 쿠키로 자막을 추출하지 못했습니다.",
+      error instanceof Error ? error.message : error,
+    );
     return null;
   }
 }

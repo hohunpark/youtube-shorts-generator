@@ -59,6 +59,7 @@ export async function downloadCaptionCues(videoId: string): Promise<SourceCaptio
 
   const vttPath = await findVtt(dir);
   if (!vttPath) {
+    console.error("[captions] yt-dlp가 자막 파일을 쓰지 않았습니다.");
     const fallback = await captionsFromTranscript(videoId);
     if (fallback) return fallback;
     throw new SourceDownloadError(CLOUD_BLOCK_MESSAGE, true);
@@ -283,7 +284,9 @@ export async function existingClipPath(videoId: string): Promise<string | null> 
 async function captionsFromTranscript(videoId: string): Promise<SourceCaptions | null> {
   try {
     return await fetchTimedCaptions(videoId);
-  } catch {
+  } catch (error) {
+    const detail = error instanceof Error ? error.stack || error.message : String(error);
+    console.error(`[captions] 자막 추출 실패: ${detail}`);
     return null;
   }
 }
@@ -332,11 +335,16 @@ function isBotBlock(error: unknown): boolean {
 
 async function runYtDlp(args: string[], timeoutMs: number): Promise<void> {
   const bin = await ensureYtDlp();
-  await runCommand(
-    bin,
-    [...(await ytDlpGuardArgs(PLAYER_CLIENTS.join(","))), ...args],
-    timeoutMs,
-  );
+  const guard = await ytDlpGuardArgs(PLAYER_CLIENTS.join(","));
+  const cookieFlag = guard.indexOf("--cookies");
+  console.error(`[yt-dlp] bin=${bin} cookies=${cookieFlag >= 0 ? guard[cookieFlag + 1] : "none"}`);
+  try {
+    await runCommand(bin, [...guard, ...args], timeoutMs);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`[yt-dlp] stderr: ${detail}`);
+    throw error;
+  }
 }
 
 async function ensureYtDlp(): Promise<string> {
