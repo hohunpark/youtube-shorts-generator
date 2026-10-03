@@ -6,6 +6,9 @@ import { parseVtt, type TimedCue } from "@/lib/timed-text";
 import { CaptionFetchError, fetchTimedCaptions } from "@/lib/youtube-captions";
 
 const YT_DLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
+const YT_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const PLAYER_CLIENTS = ["android_vr", "web_safari", "tv_embedded"];
 
 export class SourceDownloadError extends Error {}
 
@@ -20,8 +23,7 @@ export async function downloadCaptionCues(videoId: string): Promise<SourceCaptio
   const url = watchUrl(videoId);
 
   try {
-    await runCommand(
-      await ensureYtDlp(),
+    await runYtDlp(
       [
         "--no-playlist",
         "--skip-download",
@@ -73,8 +75,7 @@ export async function downloadClip(input: {
   const section = `*${ytClock(input.startSec)}-${ytClock(input.endSec)}`;
 
   try {
-    await runCommand(
-      await ensureYtDlp(),
+    await runYtDlp(
       [
         "--no-playlist",
         "--force-overwrites",
@@ -135,8 +136,7 @@ export async function downloadMontage(input: {
     await rm(target, { force: true });
     const section = `*${ytClock(part.startSec)}-${ytClock(part.endSec)}`;
     try {
-      await runCommand(
-        await ensureYtDlp(),
+      await runYtDlp(
         [
           "--no-playlist",
           "--force-overwrites",
@@ -272,6 +272,49 @@ async function captionsFromTranscript(
   }
 }
 
+async function ytDlpGuardArgs(client: string): Promise<string[]> {
+  const args = [
+    "--user-agent",
+    YT_USER_AGENT,
+    "--referer",
+    "https://www.youtube.com/",
+    "--add-header",
+    "Accept-Language:ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    "--extractor-args",
+    `youtube:player_client=${client}`,
+    "--sleep-requests",
+    "1",
+  ];
+  const cookies = process.env.YTDLP_COOKIES?.trim();
+  if (cookies && (await fileExists(cookies))) {
+    args.push("--cookies", cookies);
+  }
+  return args;
+}
+
+function isBotBlock(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /confirm you.?re not a bot|not a bot/i.test(message);
+}
+
+async function runYtDlp(args: string[], timeoutMs: number): Promise<void> {
+  const bin = await ensureYtDlp();
+  const attempts = [PLAYER_CLIENTS.join(","), ...PLAYER_CLIENTS];
+  let last: unknown;
+
+  for (const client of attempts) {
+    try {
+      await runCommand(bin, [...(await ytDlpGuardArgs(client)), ...args], timeoutMs);
+      return;
+    } catch (error) {
+      last = error;
+      if (!isBotBlock(error)) throw error;
+    }
+  }
+
+  throw last instanceof Error ? last : new SourceDownloadError("유튜브가 서버 요청을 자동 접속으로 막고 있습니다.");
+}
+
 async function ensureYtDlp(): Promise<string> {
   const onPath = await commandOnPath("yt-dlp");
   if (onPath) return onPath;
@@ -346,6 +389,11 @@ function commandOnPath(name: string): Promise<string | null> {
 
 function asDownloadError(error: unknown): SourceDownloadError {
   const message = error instanceof Error ? error.message : "";
+  if (isBotBlock(error)) {
+    return new SourceDownloadError(
+      "유튜브가 서버 요청을 자동 접속으로 막고 있습니다. 잠시 뒤 다시 시도해 주세요.",
+    );
+  }
   if (/private video|sign in|login/i.test(message)) {
     return new SourceDownloadError("비공개 영상이거나 로그인해야 볼 수 있습니다.");
   }
