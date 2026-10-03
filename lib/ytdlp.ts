@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ffmpegBinary, fileExists, runCommand } from "@/lib/command";
 import { parseVtt, type TimedCue } from "@/lib/timed-text";
-import { CaptionFetchError, fetchTimedCaptions } from "@/lib/youtube-captions";
+import { fetchTimedCaptions } from "@/lib/youtube-captions";
 import { saveSectionViaBackup } from "@/lib/youtube-media";
 
 const YT_DLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
@@ -26,6 +26,9 @@ export type SourceCaptions = {
 };
 
 export async function downloadCaptionCues(videoId: string): Promise<SourceCaptions> {
+  const fromApi = await captionsFromTranscript(videoId);
+  if (fromApi) return fromApi;
+
   const dir = sourceDir(videoId);
   await mkdir(dir, { recursive: true });
   const url = watchUrl(videoId);
@@ -47,11 +50,9 @@ export async function downloadCaptionCues(videoId: string): Promise<SourceCaptio
         path.join(dir, "source.%(ext)s"),
         url,
       ],
-      120000,
+      20000,
     );
   } catch (error) {
-    const fallback = await captionsFromTranscript(videoId, error);
-    if (fallback) return fallback;
     throw asDownloadError(error);
   }
 
@@ -100,10 +101,9 @@ export async function downloadClip(input: {
         path.join(dir, "clip.%(ext)s"),
         watchUrl(input.videoId),
       ],
-      180000,
+      20000,
     );
   } catch (error) {
-    if (!isBotBlock(error)) throw asDownloadError(error);
     const saved = await saveSectionViaBackup({
       videoId: input.videoId,
       startSec: input.startSec,
@@ -168,10 +168,10 @@ export async function downloadMontage(input: {
           target,
           watchUrl(input.videoId),
         ],
-        180000,
+        20000,
       );
     } catch (error) {
-      if (!isBotBlock(error)) throw asDownloadError(error);
+      if (!part) throw asDownloadError(error);
       const saved = await saveSectionViaBackup({
         videoId: input.videoId,
         startSec: part.startSec,
@@ -279,17 +279,10 @@ export async function existingClipPath(videoId: string): Promise<string | null> 
   return null;
 }
 
-async function captionsFromTranscript(
-  videoId: string,
-  cause?: unknown,
-): Promise<SourceCaptions | null> {
+async function captionsFromTranscript(videoId: string): Promise<SourceCaptions | null> {
   try {
     return await fetchTimedCaptions(videoId);
-  } catch (error) {
-    if (cause) return null;
-    if (error instanceof CaptionFetchError) {
-      throw new SourceDownloadError(error.message);
-    }
+  } catch {
     return null;
   }
 }
@@ -304,7 +297,13 @@ async function ytDlpGuardArgs(client: string): Promise<string[]> {
     "Accept-Language:ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
     "--extractor-args",
     `youtube:player_client=${client}`,
-    "--sleep-requests",
+    "--socket-timeout",
+    "10",
+    "--retries",
+    "1",
+    "--extractor-retries",
+    "1",
+    "--fragment-retries",
     "1",
   ];
   const proxy = readEnv("YOUTUBE_PROXY");
@@ -399,20 +398,11 @@ function isBotBlock(error: unknown): boolean {
 
 async function runYtDlp(args: string[], timeoutMs: number): Promise<void> {
   const bin = await ensureYtDlp();
-  const attempts = [PLAYER_CLIENTS.join(","), ...PLAYER_CLIENTS];
-  let last: unknown;
-
-  for (const client of attempts) {
-    try {
-      await runCommand(bin, [...(await ytDlpGuardArgs(client)), ...args], timeoutMs);
-      return;
-    } catch (error) {
-      last = error;
-      if (!isBotBlock(error)) throw error;
-    }
-  }
-
-  throw last instanceof Error ? last : new SourceDownloadError("유튜브가 서버 요청을 자동 접속으로 막고 있습니다.");
+  await runCommand(
+    bin,
+    [...(await ytDlpGuardArgs(PLAYER_CLIENTS.join(","))), ...args],
+    timeoutMs,
+  );
 }
 
 async function ensureYtDlp(): Promise<string> {

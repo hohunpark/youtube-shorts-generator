@@ -21,8 +21,8 @@ export async function saveSectionViaBackup(input: {
   output: string;
 }): Promise<boolean> {
   const urls = await mediaUrls(input.videoId);
-  for (const url of urls.slice(0, 3)) {
-    const saved = await cutRemote(url, input.startSec, input.endSec, input.output);
+  for (const url of urls.slice(0, 1)) {
+    const saved = await cutRemote(url, input.startSec, input.endSec, input.output, 20000);
     if (saved) return true;
   }
   return false;
@@ -183,6 +183,7 @@ async function cutRemote(
   startSec: number,
   endSec: number,
   output: string,
+  timeoutMs: number,
 ): Promise<boolean> {
   const proxy = readEnv("YOUTUBE_PROXY");
   try {
@@ -213,7 +214,7 @@ async function cutRemote(
         "+faststart",
         output,
       ],
-      45000,
+      timeoutMs,
     );
   } catch {
     return false;

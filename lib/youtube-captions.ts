@@ -70,18 +70,39 @@ type InvidiousCaption = {
 };
 
 async function loadTranscript(videoId: string): Promise<TranscriptResponse[]> {
+  let lastError: unknown;
   try {
-    try {
-      return await YoutubeTranscript.fetchTranscript(videoId, { lang: "ko" });
-    } catch (error) {
-      if (!(error instanceof YoutubeTranscriptNotAvailableLanguageError)) throw error;
-      return await YoutubeTranscript.fetchTranscript(videoId);
-    }
+    return await withTimeout(YoutubeTranscript.fetchTranscript(videoId, { lang: "ko" }), 12000);
   } catch (error) {
-    const backup = await fetchInvidiousTranscript(videoId);
-    if (backup && backup.length >= 2) return backup;
-    throw new CaptionFetchError(captionErrorMessage(error));
+    lastError = error;
+    if (error instanceof YoutubeTranscriptNotAvailableLanguageError) {
+      try {
+        return await withTimeout(YoutubeTranscript.fetchTranscript(videoId), 12000);
+      } catch (next) {
+        lastError = next;
+      }
+    }
   }
+
+  const backup = await fetchInvidiousTranscript(videoId);
+  if (backup && backup.length >= 2) return backup;
+  throw new CaptionFetchError(captionErrorMessage(lastError));
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("자막 API 응답 시간이 초과되었습니다.")), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function invidiousHosts(): string[] {

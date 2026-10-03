@@ -79,9 +79,13 @@ export async function createYouTubeShort(
 
   if (!result.hasSource) return { result, job: null };
 
-  const joined = result.editStyle === "highlight" && result.options.length >= 2;
-  const job = await createRenderJob(joined ? montageRequest(result) : singleRequest(result));
-  return { result, job };
+  try {
+    const joined = result.editStyle === "highlight" && result.options.length >= 2;
+    const job = await createRenderJob(joined ? montageRequest(result) : singleRequest(result));
+    return { result, job };
+  } catch {
+    return { result: scriptWithoutVideo(result), job: null };
+  }
 }
 
 export async function convertInput(input: {
@@ -158,26 +162,8 @@ async function convertFromYouTubeUrl(
         endSec: plan.clipEndSec ?? durationSec,
       });
     }
-  } catch (error) {
-    if (error instanceof SourceDownloadError && error.blocked) {
-      return {
-        ...plan,
-        hasSource: false,
-        notice: plan.notice
-          ? `${plan.notice} 영상 파일은 서버 차단으로 받지 못했고, 자막으로 쇼츠 대본을 먼저 만들었습니다.`
-          : "영상 파일은 서버 차단으로 받지 못했습니다. 자막으로 쇼츠 대본을 먼저 만들었습니다.",
-        pipeline: plan.pipeline.map((step) =>
-          step.id === "captions"
-            ? {
-                ...step,
-                detail: "자막은 우회해서 받았고, 원본 영상은 서버 차단으로 건너뛰었습니다.",
-              }
-            : step,
-        ),
-      };
-    }
-    if (error instanceof SourceDownloadError) throw new ConvertError(error.message);
-    throw error;
+  } catch {
+    return scriptWithoutVideo(plan);
   }
 
   return { ...plan, hasSource: true };
@@ -288,6 +274,23 @@ async function planFromCues(input: {
         state: "done",
       },
     ],
+  };
+}
+
+function scriptWithoutVideo(plan: ConvertResult): ConvertResult {
+  const note = "영상 파일은 서버 차단으로 받지 못했습니다. 자막으로 쇼츠 대본을 만들었습니다.";
+  return {
+    ...plan,
+    hasSource: false,
+    notice: plan.notice ? `${plan.notice} ${note}` : note,
+    pipeline: plan.pipeline.map((step) =>
+      step.id === "captions"
+        ? {
+            ...step,
+            detail: "외부 자막 API로 대본을 만들었고, 원본 영상 다운로드는 건너뛰었습니다.",
+          }
+        : step,
+    ),
   };
 }
 
