@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f3f0e8;
+  --foreground: #1c1915;
+  --paper: #f3f0e8;
+  --ink: #1c1915;
+  --muted: #6d655c;
+  --line: #e3dcd0;
+  --card: #fffdf9;
+  --accent: #c2412d;
+  --accent-soft: #f8ebe6;
+  --accent-ink: #fff8f5;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-card: var(--card);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+}
