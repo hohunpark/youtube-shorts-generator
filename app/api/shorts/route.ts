@@ -46,7 +46,9 @@ export async function POST(request: Request) {
         send({
           type: "done",
           step: done,
-          message: shortsMessage(done),
+          message: outcome.job
+            ? shortsMessage(done)
+            : "대본을 준비했습니다. 원본 영상은 서버 차단으로 받지 못했습니다.",
           result: outcome.result,
           job: outcome.job,
         });

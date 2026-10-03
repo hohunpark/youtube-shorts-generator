@@ -314,7 +314,7 @@ async function streamYouTubeShort(
   editStyle: EditStyle,
   apiKey: string,
   onProgress: (message: string) => void,
-): Promise<{ result: ConvertResult; job: RenderJob; message: string }> {
+): Promise<{ result: ConvertResult; job: RenderJob | null; message: string }> {
   onProgress(SHORTS_PROGRESS[0]);
   const response = await fetch("/api/shorts", {
     method: "POST",
@@ -335,7 +335,7 @@ async function streamYouTubeShort(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let outcome: { result: ConvertResult; job: RenderJob; message: string } | null = null;
+  let outcome: { result: ConvertResult; job: RenderJob | null; message: string } | null = null;
 
   while (true) {
     const chunk = await reader.read();
@@ -350,12 +350,12 @@ async function streamYouTubeShort(
         type?: string;
         message?: string;
         result?: ConvertResult;
-        job?: RenderJob;
+        job?: RenderJob | null;
       };
       if (event.type === "progress" && event.message) onProgress(event.message);
       if (event.type === "error") throw new Error(event.message ?? "쇼츠를 만들지 못했습니다.");
-      if (event.type === "done" && event.result && event.job && event.message) {
-        outcome = { result: event.result, job: event.job, message: event.message };
+      if (event.type === "done" && event.result && event.message) {
+        outcome = { result: event.result, job: event.job ?? null, message: event.message };
       }
     }
   }

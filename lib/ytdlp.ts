@@ -4,13 +4,21 @@ import path from "node:path";
 import { ffmpegBinary, fileExists, runCommand } from "@/lib/command";
 import { parseVtt, type TimedCue } from "@/lib/timed-text";
 import { CaptionFetchError, fetchTimedCaptions } from "@/lib/youtube-captions";
+import { saveSectionViaBackup } from "@/lib/youtube-media";
 
 const YT_DLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
 const YT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const PLAYER_CLIENTS = ["android_vr", "web_safari", "tv_embedded"];
 
-export class SourceDownloadError extends Error {}
+export class SourceDownloadError extends Error {
+  blocked: boolean;
+
+  constructor(message: string, blocked = false) {
+    super(message);
+    this.blocked = blocked;
+  }
+}
 
 export type SourceCaptions = {
   cues: TimedCue[];
@@ -95,7 +103,14 @@ export async function downloadClip(input: {
       180000,
     );
   } catch (error) {
-    throw asDownloadError(error);
+    if (!isBotBlock(error)) throw asDownloadError(error);
+    const saved = await saveSectionViaBackup({
+      videoId: input.videoId,
+      startSec: input.startSec,
+      endSec: input.endSec,
+      output: path.join(dir, "clip.mp4"),
+    });
+    if (!saved) throw asDownloadError(error);
   }
 
   const clipPath = await existingClipPath(input.videoId);
@@ -156,7 +171,14 @@ export async function downloadMontage(input: {
         180000,
       );
     } catch (error) {
-      throw asDownloadError(error);
+      if (!isBotBlock(error)) throw asDownloadError(error);
+      const saved = await saveSectionViaBackup({
+        videoId: input.videoId,
+        startSec: part.startSec,
+        endSec: part.endSec,
+        output: target,
+      });
+      if (!saved) throw asDownloadError(error);
     }
     if (!(await fileExists(target))) {
       throw new SourceDownloadError(`${index + 1}번 하이라이트 조각을 받지 못했습니다.`);
@@ -285,11 +307,89 @@ async function ytDlpGuardArgs(client: string): Promise<string[]> {
     "--sleep-requests",
     "1",
   ];
-  const cookies = process.env.YTDLP_COOKIES?.trim();
-  if (cookies && (await fileExists(cookies))) {
-    args.push("--cookies", cookies);
-  }
+  const proxy = readEnv("YOUTUBE_PROXY");
+  if (proxy) args.push("--proxy", proxy);
+  const cookies = await ensureCookieFile();
+  if (cookies) args.push("--cookies", cookies);
   return args;
+}
+
+async function ensureCookieFile(): Promise<string | null> {
+  const raw = readEnv("YOUTUBE_COOKIES") || readEnv("YTDLP_COOKIES");
+  if (!raw) return null;
+  if (!raw.includes("\n") && !raw.includes("=") && (await fileExists(raw))) return raw;
+  if (!raw.includes("\n") && !raw.includes("\t") && (await fileExists(raw))) return raw;
+
+  const file = path.join(process.cwd(), ".data", "bin", "youtube-cookies.txt");
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, normalizeCookies(raw), "utf8");
+  return file;
+}
+
+function normalizeCookies(raw: string): string {
+  const text = raw.replace(/\\n/g, "\n").trim();
+  if (text.startsWith("[") || text.startsWith("{")) {
+    const fromJson = cookiesFromJson(text);
+    if (fromJson) return fromJson;
+  }
+  if (text.includes("# Netscape") || text.includes("\t")) {
+    return text.endsWith("\n") ? text : `${text}\n`;
+  }
+
+  const lines = ["# Netscape HTTP Cookie File"];
+  for (const pair of text.replace(/^cookie:\s*/i, "").split(";")) {
+    const eq = pair.indexOf("=");
+    if (eq <= 0) continue;
+    const name = pair.slice(0, eq).trim();
+    const value = pair.slice(eq + 1).trim();
+    if (!name || !value) continue;
+    lines.push(`.youtube.com\tTRUE\t/\tTRUE\t0\t${name}\t${value}`);
+  }
+  return lines.length > 1 ? `${lines.join("\n")}\n` : `${text}\n`;
+}
+
+function cookiesFromJson(text: string): string | null {
+  try {
+    const data = JSON.parse(text) as unknown;
+    const list = Array.isArray(data) ? data : [data];
+    const lines = ["# Netscape HTTP Cookie File"];
+    for (const item of list) {
+      if (!item || typeof item !== "object") continue;
+      const row = item as Record<string, unknown>;
+      const name = cookieField(row, ["name", "Name"]);
+      const value = cookieField(row, ["value", "Value"]);
+      if (!name || value == null) continue;
+      const domain = cookieField(row, ["domain", "Domain"]) || ".youtube.com";
+      const cookiePath = cookieField(row, ["path", "Path"]) || "/";
+      const secure = row.secure === true || row.Secure === true;
+      const expiry = Math.floor(Number(row.expirationDate ?? row.expiry ?? 0)) || 0;
+      lines.push(
+        `${domain}\t${domain.startsWith(".") ? "TRUE" : "FALSE"}\t${cookiePath}\t${secure ? "TRUE" : "FALSE"}\t${expiry}\t${name}\t${value}`,
+      );
+    }
+    return lines.length > 1 ? `${lines.join("\n")}\n` : null;
+  } catch {
+    return null;
+  }
+}
+
+function cookieField(row: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function readEnv(name: string): string {
+  const value = process.env[name]?.trim() ?? "";
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1).trim();
+  }
+  return value;
 }
 
 function isBotBlock(error: unknown): boolean {
@@ -392,6 +492,7 @@ function asDownloadError(error: unknown): SourceDownloadError {
   if (isBotBlock(error)) {
     return new SourceDownloadError(
       "유튜브가 서버 요청을 자동 접속으로 막고 있습니다. 잠시 뒤 다시 시도해 주세요.",
+      true,
     );
   }
   if (/private video|sign in|login/i.test(message)) {
