@@ -6,10 +6,12 @@ import { createRenderJob } from "@/lib/render-preview";
 import type { HookTitle, RenderJob, RenderRequest } from "@/lib/render-types";
 import type { ShortsStep } from "@/lib/shorts-progress";
 import { fetchTimedCaptions } from "@/lib/youtube-captions";
-import { downloadCaptionCues, downloadClip, downloadMontage, SourceDownloadError } from "@/lib/ytdlp";
+import { downloadCaptionCues, downloadClip, downloadMontage } from "@/lib/ytdlp";
 
 const IP_BLOCK_NOTICE =
   "※ 클라우드 서버 IP 차단으로 영상 원본 파일 다운로드는 제외되었으나, 자막 기반으로 쇼츠 대본 분석이 완료되었습니다.";
+const PASTE_CAPTION_MESSAGE =
+  "유튜브 차단으로 자막을 자동으로 가져오지 못했습니다. '텍스트 / 자막' 탭에 대본을 직접 붙여넣으시면 3초 훅 및 쇼츠 대본 카드가 즉시 생성됩니다.";
 
 export class ConvertError extends Error {
   status: number;
@@ -99,15 +101,24 @@ export async function convertInput(input: {
   editStyle?: EditStyle;
   apiKey?: string;
 }): Promise<ConvertResult> {
-  if (input.source === "url") {
-    return convertFromYouTubeUrl(
-      input.value.trim(),
-      input.durationSec,
-      input.editStyle ?? "continuous",
-      input.apiKey,
-    );
+  if (input.source === "transcript") {
+    return planFromPastedTranscript(input);
   }
 
+  return convertFromYouTubeUrl(
+    input.value.trim(),
+    input.durationSec,
+    input.editStyle ?? "continuous",
+    input.apiKey,
+  );
+}
+
+function planFromPastedTranscript(input: {
+  value: string;
+  durationSec: DurationSec;
+  editStyle?: EditStyle;
+  apiKey?: string;
+}): Promise<ConvertResult> {
   return planFromCues({
     cues: mergeCues(cuesFromPlainText(input.value)),
     durationSec: input.durationSec,
@@ -292,9 +303,7 @@ async function loadCaptionText(videoId: string): Promise<{ cues: Awaited<ReturnT
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     console.error(`[captions] yt-dlp 자막 실패: ${detail}`);
-    throw new ConvertError(
-      error instanceof SourceDownloadError ? error.message : "자막 텍스트를 가져오지 못해 대본 카드를 만들지 못했습니다.",
-    );
+    throw new ConvertError(PASTE_CAPTION_MESSAGE);
   }
 }
 
