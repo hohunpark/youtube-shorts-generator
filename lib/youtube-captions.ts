@@ -4,7 +4,6 @@ import {
   YoutubeTranscript,
   YoutubeTranscriptDisabledError,
   YoutubeTranscriptNotAvailableError,
-  YoutubeTranscriptNotAvailableLanguageError,
   YoutubeTranscriptTooManyRequestError,
   YoutubeTranscriptVideoUnavailableError,
   type TranscriptResponse,
@@ -71,29 +70,55 @@ type InvidiousCaption = {
 };
 
 async function loadTranscript(videoId: string): Promise<TranscriptResponse[]> {
+  const [korean, automatic, invidious] = await Promise.allSettled([
+    withTimeout(YoutubeTranscript.fetchTranscript(videoId, { lang: "ko" }), 12000),
+    withTimeout(YoutubeTranscript.fetchTranscript(videoId), 12000),
+    fetchInvidiousTranscript(videoId),
+  ]);
+
+  const picked = readyRows(korean) ?? readyRows(automatic) ?? readyRows(invidious);
+  if (picked) {
+    console.error(`[captions] 외부 자막 API 성공 segments=${picked.length}`);
+    return picked;
+  }
+
+  logCaptionFailure("youtube-transcript ko", korean);
+  logCaptionFailure("youtube-transcript auto", automatic);
+  logCaptionFailure("invidious", invidious);
+
   const cookie = await youtubeCookieHeader();
   if (cookie) {
     const fromCookies = await fetchTranscriptWithCookies(videoId, cookie);
-    if (fromCookies && fromCookies.length >= 2) return fromCookies;
-  }
-
-  let lastError: unknown;
-  try {
-    return await withTimeout(YoutubeTranscript.fetchTranscript(videoId, { lang: "ko" }), 12000);
-  } catch (error) {
-    lastError = error;
-    if (error instanceof YoutubeTranscriptNotAvailableLanguageError) {
-      try {
-        return await withTimeout(YoutubeTranscript.fetchTranscript(videoId), 12000);
-      } catch (next) {
-        lastError = next;
-      }
+    if (fromCookies && fromCookies.length >= 2) {
+      console.error(`[captions] 쿠키 자막 성공 segments=${fromCookies.length}`);
+      return fromCookies;
     }
   }
 
-  const backup = await fetchInvidiousTranscript(videoId);
-  if (backup && backup.length >= 2) return backup;
-  throw new CaptionFetchError(captionErrorMessage(lastError));
+  const reason = settledReason(korean) ?? settledReason(automatic) ?? settledReason(invidious);
+  throw new CaptionFetchError(captionErrorMessage(reason ?? new Error("자막 API 실패")));
+}
+
+function readyRows(
+  result: PromiseSettledResult<TranscriptResponse[] | null>,
+): TranscriptResponse[] | null {
+  if (result.status !== "fulfilled" || !result.value || result.value.length < 2) return null;
+  return result.value;
+}
+
+function logCaptionFailure(label: string, result: PromiseSettledResult<unknown>): void {
+  if (result.status !== "rejected") {
+    console.error(`[captions] ${label} 결과 없음`);
+    return;
+  }
+  const error = result.reason;
+  const name = error instanceof Error ? error.name : "Error";
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`[captions] ${label} 실패 ${name}: ${message}`);
+}
+
+function settledReason(result: PromiseSettledResult<unknown>): unknown {
+  return result.status === "rejected" ? result.reason : null;
 }
 
 async function fetchTranscriptWithCookies(
@@ -222,41 +247,58 @@ function invidiousHosts(): string[] {
   if (fromEnv?.length) return fromEnv;
   return [
     "https://inv.nadeko.net",
+    "https://yewtu.be",
+    "https://invidious.nerdvpn.de",
     "https://yt.artemislena.eu",
     "https://invidious.privacyredirect.com",
+    "https://inv.tux.pizza",
   ];
 }
 
 async function fetchInvidiousTranscript(videoId: string): Promise<TranscriptResponse[] | null> {
-  for (const host of invidiousHosts()) {
-    try {
-      const listResponse = await fetch(`${host}/api/v1/captions/${videoId}`, {
-        headers: { Accept: "application/json", "User-Agent": INVIDIOUS_USER_AGENT },
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!listResponse.ok) continue;
-      const list = (await listResponse.json()) as InvidiousCaption[];
-      if (!Array.isArray(list)) continue;
-      const track = pickCaption(list);
-      if (!track?.url) continue;
+  const attempts = invidiousHosts().map(async (host) => {
+    const rows = await fetchOneInvidious(host, videoId);
+    if (!rows || rows.length < 2) throw new Error(`${host} 자막 없음`);
+    console.error(`[captions] invidious 성공 host=${host} segments=${rows.length}`);
+    return rows;
+  });
 
-      const captionUrl = track.url.startsWith("http")
-        ? track.url
-        : `${host}${track.url.startsWith("/") ? "" : "/"}${track.url}`;
-      const bodyResponse = await fetch(captionUrl, {
-        headers: { "User-Agent": INVIDIOUS_USER_AGENT },
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!bodyResponse.ok) continue;
-
-      const lang = captionLanguage(track);
-      const rows = transcriptFromCaptionBody(await bodyResponse.text(), lang);
-      if (rows.length >= 2) return rows;
-    } catch {
-      continue;
-    }
+  try {
+    return await Promise.any(attempts);
+  } catch (error) {
+    const details =
+      error instanceof AggregateError
+        ? error.errors.map((item: unknown) => (item instanceof Error ? item.message : String(item))).join(" | ")
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    console.error(`[captions] Invidious 전체 실패: ${details}`);
+    return null;
   }
-  return null;
+}
+
+async function fetchOneInvidious(host: string, videoId: string): Promise<TranscriptResponse[] | null> {
+  const listResponse = await fetch(`${host}/api/v1/captions/${videoId}`, {
+    headers: { Accept: "application/json", "User-Agent": INVIDIOUS_USER_AGENT },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!listResponse.ok) {
+    throw new Error(`${host} captions status=${listResponse.status}`);
+  }
+  const list = (await listResponse.json()) as InvidiousCaption[];
+  if (!Array.isArray(list)) throw new Error(`${host} captions JSON이 배열이 아닙니다.`);
+  const track = pickCaption(list);
+  if (!track?.url) throw new Error(`${host} 자막 트랙 없음`);
+
+  const captionUrl = track.url.startsWith("http")
+    ? track.url
+    : `${host}${track.url.startsWith("/") ? "" : "/"}${track.url}`;
+  const bodyResponse = await fetch(captionUrl, {
+    headers: { "User-Agent": INVIDIOUS_USER_AGENT },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!bodyResponse.ok) throw new Error(`${host} track status=${bodyResponse.status}`);
+  return transcriptFromCaptionBody(await bodyResponse.text(), captionLanguage(track));
 }
 
 function pickCaption(list: InvidiousCaption[]): InvidiousCaption | null {

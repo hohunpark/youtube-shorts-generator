@@ -132,6 +132,8 @@ async function convertFromYouTubeUrl(
   try {
     captions = await downloadCaptionCues(videoId);
   } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`[captions] 대본 생성 전 자막 단계 실패: ${detail}`);
     if (error instanceof SourceDownloadError) throw new ConvertError(error.message);
     throw error;
   }

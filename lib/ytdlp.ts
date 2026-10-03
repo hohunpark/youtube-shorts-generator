@@ -27,6 +27,8 @@ export type SourceCaptions = {
 };
 
 export async function downloadCaptionCues(videoId: string): Promise<SourceCaptions> {
+  const cookieFile = await ensureCookieFile();
+  console.error(`[captions] 시작 video=${videoId} cookieFile=${cookieFile ?? "none"}`);
   const fromApi = await captionsFromTranscript(videoId);
   if (fromApi) return fromApi;
 
@@ -337,7 +339,9 @@ async function runYtDlp(args: string[], timeoutMs: number): Promise<void> {
   const bin = await ensureYtDlp();
   const guard = await ytDlpGuardArgs(PLAYER_CLIENTS.join(","));
   const cookieFlag = guard.indexOf("--cookies");
-  console.error(`[yt-dlp] bin=${bin} cookies=${cookieFlag >= 0 ? guard[cookieFlag + 1] : "none"}`);
+  const cookiePath = cookieFlag >= 0 ? guard[cookieFlag + 1] : undefined;
+  const cookieReady = cookiePath ? await fileExists(cookiePath) : false;
+  console.error(`[yt-dlp] bin=${bin} cookiesFlag=${cookieReady} path=${cookiePath ?? "none"}`);
   try {
     await runCommand(bin, [...guard, ...args], timeoutMs);
   } catch (error) {
@@ -421,18 +425,21 @@ function commandOnPath(name: string): Promise<string | null> {
 
 function asDownloadError(error: unknown): SourceDownloadError {
   const message = error instanceof Error ? error.message : "";
-  if (isBotBlock(error)) {
+  console.error(`[yt-dlp] 오류 분류 전 stderr: ${message.slice(0, 2000)}`);
+  if (isBotBlock(error) || isDatacenterUnavailable(message)) {
+    console.error("[yt-dlp] stderr를 클라우드 IP 차단으로 분류했습니다.");
     return new SourceDownloadError(CLOUD_BLOCK_MESSAGE, true);
   }
-  if (/private video|sign in|login/i.test(message)) {
+  if (/private video/i.test(message)) {
     return new SourceDownloadError("비공개 영상이거나 로그인해야 볼 수 있습니다.");
-  }
-  if (/unavailable|not available/i.test(message)) {
-    return new SourceDownloadError("영상을 찾을 수 없거나 공개 상태가 아닙니다.");
   }
   if (/caption|subtitles/i.test(message) && /not available/i.test(message)) {
     return new SourceDownloadError("이 영상에는 가져올 수 있는 자막이 없습니다.");
   }
   if (error instanceof SourceDownloadError) return error;
   return new SourceDownloadError(CLOUD_BLOCK_MESSAGE, true);
+}
+
+function isDatacenterUnavailable(message: string): boolean {
+  return /unavailable|not available|sign in|login/i.test(message);
 }
