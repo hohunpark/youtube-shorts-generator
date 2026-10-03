@@ -122,6 +122,11 @@ function ReadyCard({
 
   return (
     <article className="overflow-hidden rounded-3xl border border-line bg-card shadow-[0_20px_50px_-36px_rgba(28,25,21,0.55)]">
+      {result.notice ? (
+        <p className="border-b border-line bg-accent-soft px-6 py-3 text-sm leading-6 text-accent">
+          {result.notice}
+        </p>
+      ) : null}
       <header className="flex items-start justify-between gap-4 border-b border-line px-6 py-5">
         <div>
           <p className="text-xs font-medium tracking-[0.16em] text-accent uppercase">
@@ -211,7 +216,6 @@ function ReadyCard({
           <p className="mt-3 text-xs text-muted">
             길이 약 {active?.readSeconds ?? result.readSeconds}초 · {result.sourceLabel}
           </p>
-          {result.notice ? <p className="mt-2 text-sm leading-6 text-muted">{result.notice}</p> : null}
         </section>
 
         <section>

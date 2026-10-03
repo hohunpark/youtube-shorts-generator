@@ -48,7 +48,7 @@ export async function POST(request: Request) {
           step: done,
           message: outcome.job
             ? shortsMessage(done)
-            : "대본을 준비했습니다. 원본 영상은 서버 차단으로 받지 못했습니다.",
+            : "※ 클라우드 서버 IP 차단으로 영상 원본 파일 다운로드는 제외되었으나, 자막 기반으로 쇼츠 대본 분석이 완료되었습니다.",
           result: outcome.result,
           job: outcome.job,
         });

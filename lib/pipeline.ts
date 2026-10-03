@@ -5,7 +5,11 @@ import type { ClipOption, ConvertResult, DurationSec, EditStyle, PaceBeat, Scene
 import { createRenderJob } from "@/lib/render-preview";
 import type { HookTitle, RenderJob, RenderRequest } from "@/lib/render-types";
 import type { ShortsStep } from "@/lib/shorts-progress";
+import { fetchTimedCaptions } from "@/lib/youtube-captions";
 import { downloadCaptionCues, downloadClip, downloadMontage, SourceDownloadError } from "@/lib/ytdlp";
+
+const IP_BLOCK_NOTICE =
+  "※ 클라우드 서버 IP 차단으로 영상 원본 파일 다운로드는 제외되었으나, 자막 기반으로 쇼츠 대본 분석이 완료되었습니다.";
 
 export class ConvertError extends Error {
   status: number;
@@ -128,15 +132,7 @@ async function convertFromYouTubeUrl(
   }
 
   onProgress?.(1);
-  let captions;
-  try {
-    captions = await downloadCaptionCues(videoId);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    console.error(`[captions] 대본 생성 전 자막 단계 실패: ${detail}`);
-    if (error instanceof SourceDownloadError) throw new ConvertError(error.message);
-    throw error;
-  }
+  const captions = await loadCaptionText(videoId);
 
   onProgress?.(2);
   const plan = await planFromCues({
@@ -279,12 +275,34 @@ async function planFromCues(input: {
   };
 }
 
+async function loadCaptionText(videoId: string): Promise<{ cues: Awaited<ReturnType<typeof fetchTimedCaptions>>["cues"]; language: string }> {
+  try {
+    const timed = await fetchTimedCaptions(videoId);
+    console.error(`[captions] 외부 자막 API ${timed.cues.length}줄 lang=${timed.language}`);
+    return timed;
+  } catch (error) {
+    console.error(
+      "[captions] 외부 자막 API 실패",
+      error instanceof Error ? error.message : error,
+    );
+  }
+
+  try {
+    return await downloadCaptionCues(videoId);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`[captions] yt-dlp 자막 실패: ${detail}`);
+    throw new ConvertError(
+      error instanceof SourceDownloadError ? error.message : "자막 텍스트를 가져오지 못해 대본 카드를 만들지 못했습니다.",
+    );
+  }
+}
+
 function scriptWithoutVideo(plan: ConvertResult): ConvertResult {
-  const note = "영상 파일은 서버 차단으로 받지 못했습니다. 자막으로 쇼츠 대본을 만들었습니다.";
   return {
     ...plan,
     hasSource: false,
-    notice: plan.notice ? `${plan.notice} ${note}` : note,
+    notice: plan.notice ? `${IP_BLOCK_NOTICE} ${plan.notice}` : IP_BLOCK_NOTICE,
     pipeline: plan.pipeline.map((step) =>
       step.id === "captions"
         ? {
